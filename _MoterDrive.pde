@@ -2,6 +2,7 @@
 #include <IRremote.h>
 #include <SoftwareSerial.h>
 
+//// pin numbers //////////////////////
 #define checkPinA 2
 #define checkPinB 3
 #define rxPin 4
@@ -9,11 +10,14 @@
 #define sensorPin1 A0
 #define sensorPin2 A1
 #define RECV_PIN 11
+///////////////////////////////////////
 
-//for drive function
+
+//for motor drive function
 int count = 0;
 int pen_direction = 0;
-int last_pen_direction = 0;
+int motorSpeedBack = 20;
+int motorSpeedFront = 25;
 
 //for IR function
 int motorValue;
@@ -29,7 +33,6 @@ int index = 0;
 
 
 SoftwareSerial mySerial =  SoftwareSerial(rxPin, txPin);
-
 IRrecv irrecv(RECV_PIN);
 decode_results results;
 
@@ -40,11 +43,11 @@ void setup(){
   mySerial.begin(9600);
   mySerial.print(127, BYTE);
 
-  pen_direction = -1;
   irrecv.enableIRIn();
 
+  //割り込み
   attachInterrupt(1, rotary, CHANGE);
-  
+
   pinMode(rxPin, INPUT);
   pinMode(txPin, OUTPUT);
   pinMode(checkPinA, INPUT);
@@ -53,28 +56,13 @@ void setup(){
   pinMode(sensorPin2, INPUT);
 }
 
+// メインループ ///////////////////////////////////////////
 void loop(){
 
-  ircheck();
-
-  if(irState == 1436){
-    remoteMode = !remoteMode;
-  }
-
-  if (remoteMode){
-    if(irState == 27803){
-      motorValue = 145;
-    }
-    else if (irState == 11419){
-      motorValue = 100; //reverse
-    }
-    else if (irState == 19613){
-      motorValue = 127;
-    }
-    mySerial.print(motorValue, BYTE); //forward
-  }
+  ir(); //赤外線処理関数
 
 
+  //距離センサの値を平均化
   int raw1 = analogRead(sensorPin1);
   int raw2 = analogRead(sensorPin2);
   buffer1[index] = raw1;
@@ -92,89 +80,97 @@ void loop(){
     Serial.println(smoothedValue2, DEC);
     Serial.read();
   }
+
 }
 
+// インタラプタ起動時 //////////////////////////////////////
 void rotary(){
-  if(!remoteMode){
+  if(!remoteMode){ //ドライブモード
+
     if(smoothedValue1 > 60){
-      if(smoothedValue2 > 60){
-        if(digitalRead(checkPinA) == HIGH){
-          if(digitalRead(checkPinB) == HIGH){
-            count++;
-            pen_direction = 1;
-            motor();
-            last_pen_direction = pen_direction; 
-          }
-          else{
-            count--;
-            pen_direction = 0;
-            motor();
-            last_pen_direction = pen_direction; 
-          }
-        }
-        if(digitalRead(checkPinA) == LOW){
-          if(digitalRead(checkPinB) == LOW){
-            count++;
-            pen_direction = 1;
-            motor();
-            last_pen_direction = pen_direction;
-          }
-          else{
-            count--;
-            pen_direction = 0;
-            motor();
-            delay(100);
-            last_pen_direction = pen_direction;      
-          }
-        }
-        //Serial.print(pen_direction);
-        //Serial.print(" ");
-        //Serial.println(count);
-        //delay(30);
-        if (count > 16) {
-          count = 1;
-        }
-        if (count < 0) {
-          count = 16;
-        }
+      if(smoothedValue2 > 60){       
+        motor(checkPinA, checkPinB);       
       }
       else {
-        mySerial.print(143, BYTE);
-        delay(2000);
+        mySerial.print(127 + motorSpeedFront, BYTE);
+        delay(3000);
       }
     }
     else {
-      mySerial.print(110, BYTE);
-      delay(2000);
+      mySerial.print(127 - motorSpeedBack, BYTE);
+      delay(3000);
     }
   }
+
+  else { //リモートモード
+    mySerial.print(127, BYTE); //停止
+  }    
 }
 
+// モーター関係の処理 /////////////////////////////////////
+void motor(int pinA, int pinB){
+  if(digitalRead(pinA) == HIGH){
+    if(digitalRead(pinB) == HIGH){
+      count++;
+      pen_direction = 1;
+    }
+    else{
+      count--;
+      pen_direction = 0;
+    }
+  }
+  if(digitalRead(pinA) == LOW){
+    if(digitalRead(pinB) == LOW){
+      count++;
+      pen_direction = 1;
+    }
+    else{
+      count--;
+      pen_direction = 0;
+      delay(100);
+    }
+  }
+  //Serial.print(pen_direction);
+  //Serial.print(" ");
+  //Serial.println(count);
+  //delay(30);
+  if (count > 16) {
+    count = 1;
+  }
+  if (count < 0) {
+    count = 16;
+  }
 
-
-void motor(){
-  //  if(pen_direction == 1 && last_pen_direction == 0){
+  //drive
   if(pen_direction == 1){
-    mySerial.print(100, BYTE);
+    mySerial.print(127 - motorSpeedBack, BYTE);
   }
-  //  else  if(pen_direction == 0 && last_pen_direction == 1){
   else  if(pen_direction == 0){
-    mySerial.print(153, BYTE);
+    mySerial.print(127 + motorSpeedFront, BYTE);
   }
 }
-void ircheck() {
+
+
+// リモコン処理 //////////////////////////////////////////
+void ir() {
   if (irrecv.decode(&results)) {
     irState = results.value;
     irrecv.resume();
   }
   else{
     irState = 0;
-    //    irrecv.resume();
+  }
+
+  if(irState == 19613){ //電源ボタン
+    remoteMode = true; //強制停止
+  }
+  else if(irState == 21661){ //”フォト”ボタン
+    remoteMode = false; //ドライブモードon
   }
 }
 
 
-// Meanフィルタによるスムージング
+// Meanフィルタによるスムージング ///////////////////////////
 int smoothByMeanFilter(int b[]) {
   // バッファの値の合計を集計するための変数
   long sum = 0;
